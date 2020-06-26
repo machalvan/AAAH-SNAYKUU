@@ -131,7 +131,11 @@ class SnakeSettingsPanel extends JPanel
 			reloadAllBrainsButton.addActionListener(new ReloadBrainsListener());
 			gridbag.setConstraints(reloadAllBrainsButton, constraint);
 			add(reloadAllBrainsButton);
-		
+
+		// Always preselect DeepRed
+		snakes.put(new AddSnakeListener().generateSnakeName("DeepRed"), "DeepRed");
+		snakeJList.setListData(snakes.keySet().toArray());
+
 		loadBrains();
 	}
 	

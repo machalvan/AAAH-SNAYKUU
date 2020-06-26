@@ -54,6 +54,7 @@ public class SettingsWindow extends JFrame
 	public void putThisDamnWindowInMyFace()
 	{
 		done = false;
+		done = true;  // Start game automatically
 		setLocationRelativeTo(null);
 		setVisible(true);
 	}
