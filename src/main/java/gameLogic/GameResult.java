@@ -46,6 +46,7 @@ public class GameResult
 					addedToExistingList = true;
 				}
 			}
+
 			if (!addedToExistingList)
 			{
 				ArrayList<Snake> newPlacement = new ArrayList<Snake>();

@@ -4,71 +4,220 @@ import gameLogic.*;
 import org.tensorflow.*;
 import org.tensorflow.Tensor;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 
 public class DeepRed implements Brain {
-	private GameState gameState;
-	private Snake self;
+    private GameState gameState;
+    private Snake self;
+    private int boardHeight;
+    private int boardWidth;
+    private final int VIEW_DISTANCE = 2;
+    private final int NUM_OF_INPUTS = (int) Math.pow(VIEW_DISTANCE * 2 + 1, 2);
+    private final int INPUT_GRID_SIDE = (int) Math.sqrt(NUM_OF_INPUTS);
+    private final int NUM_OF_GRIDS = 5;
 
-	public Direction getNextMove(Snake self, GameState gameState) {
+    private final int EMPTY = 0;
+    private final int SELF = 1;
+    private final int OTHER_HEAD = 2;
+    private final int OTHER_BODY = 3;
+    private final int WALL = -1; //4;  // or dead snake
+    private final int FRUIT = 9; //5;
+
+    private final boolean HOT_ENCODED = true;
+    private final String MODEL_DIR = "modelsThatAreGood/5x5_hotEncoded";
+    private final SavedModelBundle MODEL = SavedModelBundle.load(MODEL_DIR, "serve");
+
+    public Direction getNextMove(Snake self, GameState gameState) {
         this.self = self;
         this.gameState = gameState;
+        this.boardHeight = gameState.getBoard().getHeight();
+        this.boardWidth = gameState.getBoard().getWidth();
 
-        System.out.println( "Hello World! I'm using tensorflow version " + TensorFlow.version() );
-        String modelDir = "./smaller_input_model6";
+        System.out.println("Hello World! I'm using tensorflow version " + TensorFlow.version());
 
-        float[][] inputData = getInputData();
-        printInput(inputData);
+        int[][] inputData = getInputData();
 
-        SavedModelBundle model = SavedModelBundle.load(modelDir, "serve");
-        Tensor inputTensor = Tensor.create(inputData);
+        if (HOT_ENCODED) {
+            float[] hotEncodedInput = new float[NUM_OF_INPUTS * NUM_OF_GRIDS];
+            int[] squares = new int[]{WALL, SELF, OTHER_HEAD, OTHER_BODY, FRUIT};
 
-        Tensor tensor = model.session().runner()
-                .fetch("network/output_layer")
-                .feed("network/input_layer", inputTensor)   // float
-                //.feed("actual_move", actualMoveTensor)      // float
-                .run().get(0); //.expect(Float[].class);
+            for (int i = 0; i < squares.length; i++) {
+                int square = squares[i];
 
-        System.out.println(tensor.toString());
-        System.out.println(tensor.shape().toString());
+                for (int j = 0; j < inputData.length; j++) {
+                    int[] inputDataRow = inputData[j];
 
-        float[][] vector = (float[][]) tensor.copyTo(new float[1][3]);
-
-        int intDir = getMaxIndex(vector[0]);
-        System.out.println("intDir: " + intDir);
-
-        for (float[] v : vector) {
-            for (float w : v) {
-                System.out.println("w: " + w);
+                    for (int k = 0; k < inputDataRow.length; k++) {
+                        int cell = inputDataRow[k];
+                        hotEncodedInput[i * squares.length * inputDataRow.length + j * inputDataRow.length + k] = cell == square ? 1 : 0;
+                    }
+                }
             }
+
+            float[][] hotEncodedInputData = new float[1][NUM_OF_INPUTS * NUM_OF_GRIDS];
+            hotEncodedInputData[0] = hotEncodedInput;
+
+
+            for (int j = 0; j < hotEncodedInput.length; j++) {
+                float cell = hotEncodedInput[j];
+                System.out.print((int) cell + " ");
+
+                if ((j + 1) % NUM_OF_GRIDS == 0) {
+                    System.out.println();
+                }
+
+                if ((j + 1) % NUM_OF_INPUTS == 0) {
+                    System.out.println();
+                }
+            }
+
+
+            Tensor inputTensor = Tensor.create(hotEncodedInputData);
+
+            System.out.println("här");
+            Tensor tensor = MODEL.session().runner()
+                    .fetch("network/output_layer")
+                    .feed("network/input_layer", inputTensor)
+                    .run().get(0); //.expect(Float[].class);
+            System.out.println("tensor: " + tensor);
+
+            int outputs = (int) tensor.shape()[1];
+
+            float[][] vector;
+            Direction nextMove;
+            if (outputs == 3) {
+                vector = (float[][]) tensor.copyTo(new float[1][3]);
+                int intDir = getMaxIndex(vector[0]);
+
+                Direction goForward = self.getCurrentDirection();
+                Direction goLeft = goForward.turnLeft();
+                Direction goRight = goForward.turnRight();
+
+                switch (intDir) {
+                    case 0:
+                        nextMove = goLeft;
+                        break;
+                    case 1:
+                        nextMove = goForward;
+                        break;
+                    case 2:
+                        nextMove = goRight;
+                        break;
+                    default:
+                        System.out.println("RHEEE");
+                        nextMove = goForward;
+                }
+            } else {
+                System.out.println("4 outputs");
+                vector = (float[][]) tensor.copyTo(new float[1][4]);
+                int intDir = getMaxIndex(vector[0]);
+
+                switch (intDir) {
+                    case 0:
+                        nextMove = Direction.NORTH;
+                        break;
+                    case 1:
+                        nextMove = Direction.EAST;
+                        break;
+                    case 2:
+                        nextMove = Direction.SOUTH;
+                        break;
+                    case 3:
+                        nextMove = Direction.WEST;
+                        break;
+                    default:
+                        System.out.println("RHEEE");
+                        nextMove = Direction.NORTH;
+                }
+            }
+
+            printDirectionScores(vector, outputs);
+            System.out.println("I am going: " + nextMove);
+
+            return nextMove;
+
+        } else {
+
+            int[][] inputDataFlat = matrixReshape(inputData, 1, NUM_OF_INPUTS);
+            float[][] inputDataFlat2 = new float[1][NUM_OF_INPUTS];
+            System.out.println("here-1");
+
+            for (int i = 0; i < inputDataFlat.length; i++) {
+                int[] inputDataFlatRow = inputDataFlat[i];
+
+                for (int j = 0; j < inputDataFlatRow.length; j++) {
+                    inputDataFlat2[i][j] = inputDataFlat[i][j];
+                }
+            }
+
+
+            printInput(inputData);
+
+            //Tensor inputTensor = Tensor.create(inputDataFlat);
+            Tensor inputTensor = Tensor.create(inputDataFlat2);
+
+            Tensor tensor = MODEL.session().runner()
+                    .fetch("network/output_layer")
+                    .feed("network/input_layer", inputTensor)
+                    .run().get(0); //.expect(Float[].class);
+
+
+            int outputs = (int) tensor.shape()[1];
+
+            float[][] vector;
+            Direction nextMove;
+            if (outputs == 3) {
+                vector = (float[][]) tensor.copyTo(new float[1][3]);
+                int intDir = getMaxIndex(vector[0]);
+
+                Direction goForward = self.getCurrentDirection();
+                Direction goLeft = goForward.turnLeft();
+                Direction goRight = goForward.turnRight();
+
+                switch (intDir) {
+                    case 0:
+                        nextMove = goLeft;
+                        break;
+                    case 1:
+                        nextMove = goForward;
+                        break;
+                    case 2:
+                        nextMove = goRight;
+                        break;
+                    default:
+                        System.out.println("RHEEE");
+                        nextMove = goForward;
+                }
+            } else {
+                System.out.println("4 outputs");
+                vector = (float[][]) tensor.copyTo(new float[1][4]);
+                int intDir = getMaxIndex(vector[0]);
+
+                switch (intDir) {
+                    case 0:
+                        nextMove = Direction.NORTH;
+                        break;
+                    case 1:
+                        nextMove = Direction.EAST;
+                        break;
+                    case 2:
+                        nextMove = Direction.SOUTH;
+                        break;
+                    case 3:
+                        nextMove = Direction.WEST;
+                        break;
+                    default:
+                        System.out.println("RHEEE");
+                        nextMove = Direction.NORTH;
+                }
+            }
+
+            printDirectionScores(vector, outputs);
+            System.out.println("I am going: " + nextMove);
+
+            return nextMove;
         }
-        System.out.println();
-
-        Direction goForward = self.getCurrentDirection();
-        Direction goLeft = goForward.turnLeft();
-        Direction goRight = goForward.turnRight();
-
-        Direction nextMove;
-        switch (intDir) {
-            case 0:
-                nextMove = goLeft;
-                break;
-            case 1:
-                nextMove = goForward;
-                break;
-            case 2:
-                nextMove = goRight;
-                break;
-            default:
-                System.out.println("RHEEE");
-                nextMove = goForward;
-        }
-
-        System.out.println("I am going: " + nextMove);
-
-		return nextMove;
-	}
+    }
 
     private boolean isSamePosition(Position p1, Position p2) { return p1.getX() == p2.getX() && p1.getY() == p2.getY(); }
 
@@ -84,36 +233,72 @@ public class DeepRed implements Brain {
         return maxAt;
     }
 
-    private void printInput(float[][] inputData) {
-        System.out.println("inputData");
+    private void printInput(int[][] inputData) {
+        int middleIndex = Math.floorDiv(inputData.length, 2);
 
-        for (float[] row : inputData) {
-            for (float cell : row) {
-                String symbol = Integer.toString((int) cell);
-                if (cell < 0) { symbol = "-"; };
+        for (int i = 0; i < inputData.length; i++) {
+            int[] row = inputData[i];
+
+            for (int j = 0; j < row.length; j++) {
+                int cell = (int) row[j];
+                String symbol;
+
+                switch (cell) {
+                    case EMPTY:
+                        symbol = ".";
+                        break;
+                    case SELF:
+                        symbol = i == middleIndex && j == middleIndex ? "☻" : "o";
+                        break;
+                    case OTHER_HEAD:
+                        symbol = "☺";
+                        break;
+                    case OTHER_BODY:
+                        symbol = "o";
+                        break;
+                    case WALL:
+                        symbol = "#";
+                        break;
+                    case FRUIT:
+                        symbol = "X";
+                        break;
+                    default:
+                        symbol = "?";
+                }
+
                 System.out.print(symbol + " ");
             }
+
             System.out.println();
         }
+
+        System.out.println();
+    }
+
+    private void printDirectionScores(float[][] vector, int outputs) {
+        String[] directions;
+        if (outputs == 3) {
+            directions = new String[]{"Left", "Forward", "Right"};
+        } else {
+            directions = new String[]{"North", "East", "South", "West"};
+        }
+
+        for (float[] v : vector) {
+            for (int i = 0; i < v.length; i++) {
+                System.out.println(String.format("%s: %s", directions[i], v[i]));
+            }
+        }
+        System.out.println();
     }
 
     private int[][] getBoardState() {
-        final int EMPTY = 0;
-        final int SELF = 1;
-        final int OTHER_HEAD = 2;
-        final int OTHER_BODY = 3;
-        final int WALL = 4;  // or dead snake
-        final int FRUIT = 5;
-
         Board board = gameState.getBoard();
-        int height = board.getHeight();
-        int width = board.getWidth();
-        int[][] boardState = new int[height][width];
+        int[][] boardState = new int[boardHeight][boardWidth];
 
-        for (int y = 0; y < height; y++) {
-            ArrayList<Integer> row = new ArrayList<>();
+        for (int y = 0; y < boardHeight; y++) {
+            //ArrayList<Integer> row = new ArrayList<>();
 
-            for (int x = 0; x < width; x++) {
+            for (int x = 0; x < boardWidth; x++) {
                 Position pos = new Position(x, y);
                 Square square = board.getSquare(pos);
                 int cell = EMPTY;
@@ -139,50 +324,34 @@ public class DeepRed implements Brain {
                     cell = FRUIT;
                 }
 
-                row.add(cell);
+                //row.add(cell);
                 boardState[y][x] = cell;
             }
-
-            //boardState.add(new ArrayList<>(row));
         }
 
-        //int[][] boardState = new ArrayList<ArrayList<Integer>>(boardState);
-        //System.out.println("Board state: " + boardState.toString());
         return boardState;
     }
 
-    private float[][] getInputData() {
+    private int[][] getInputData() {
         int shape = 0;           // 0 = KVADRAT, 1 = RUTER
-        int inputGridSize = 9;
-        int gridSideLength = (int) Math.sqrt(inputGridSize);
-        int boardMargin = gridSideLength;  // To left and right, as well as up and down
-        int radius = gridSideLength / 2;
-        System.out.println("radius " + radius);
-        System.out.println("boardMargin " + boardMargin);
-        float[][] newBoardState = new float[gridSideLength][gridSideLength];
+        int boardMargin = INPUT_GRID_SIDE;  // To left and right, as well as up and down
+        int radius = INPUT_GRID_SIDE / 2;
+        int[][] newBoardState = new int[INPUT_GRID_SIDE][INPUT_GRID_SIDE];
         int[][] boardState = getBoardState();
-        Board board = gameState.getBoard();
-        int height = board.getHeight();
-        int width = board.getWidth();
 
         Position headPos = self.getHeadPosition();
         boolean firstVisionGridSquare = true;
         int visionGridStartX = 0;
         int visionGridStartY = 0;
 
-        for (int y = 0; y < height + boardMargin; y++) {
+        for (int y = 0; y < boardHeight + boardMargin; y++) {
             int y2 = y - boardMargin / 2;
-            //System.out.println("y " + y);
-            //System.out.println("y2 " + y2);
-            //int[] row = new int[y2];
 
-            for (int x = 0; x < width + boardMargin; x++) {
+            for (int x = 0; x < boardWidth + boardMargin; x++) {
                 int x2 = x - boardMargin / 2;
-//                System.out.println("x " + x);
-//                System.out.println("x2 " + x2);
-                int square = 0;
+                int square = WALL;  // Outside grid
 
-                if (x2 >= 0 && x2 < width && y2 >= 0 && y2 < height) {
+                if (x2 >= 0 && x2 < boardWidth && y2 >= 0 && y2 < boardHeight) {
                     square = boardState[y2][x2];
                 }
 
@@ -197,8 +366,6 @@ public class DeepRed implements Brain {
                 }
 
                 if (condition) {
-                    //row[x2] = square;  //.add(square);
-
                     if (firstVisionGridSquare) {
                         visionGridStartX = x2;
                         visionGridStartY = y2;
@@ -210,11 +377,8 @@ public class DeepRed implements Brain {
             }
         }
 
-        System.out.println("newBoardState: " + Arrays.deepToString(newBoardState));
-        float[][] newBoardState2 = matrixReshape(newBoardState, 1, 9);
-        System.out.println("newBoardState2: " + Arrays.deepToString(newBoardState2));
-
-        return newBoardState2;
+        System.out.println("Board state: " + Arrays.deepToString(newBoardState));
+        return newBoardState;
     }
 
     /*
@@ -226,16 +390,16 @@ public class DeepRed implements Brain {
      * Output:
      * [[1,2,3,4]]
      */
-    public float[][] matrixReshape(float[][] nums, int r, int c) {
+    public int[][] matrixReshape(int[][] nums, int r, int c) {
         int totalElements = nums.length * nums[0].length;
         if (totalElements != r * c || totalElements % r != 0) {
             System.out.println("Exiting...");
             return nums;
         }
-        final float[][] result = new float[r][c];
+        final int[][] result = new int[r][c];
         int newR = 0;
         int newC = 0;
-        for (float[] num : nums) {
+        for (int[] num : nums) {
             for (float i : num) {
                 result[newR][newC] = (int) i;
                 newC++;
